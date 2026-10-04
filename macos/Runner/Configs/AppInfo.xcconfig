@@ -8,8 +8,7 @@
 PRODUCT_NAME = Jahan Bit
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.example.internetManagement
+PRODUCT_BUNDLE_IDENTIFIER = com.jahanbit.app
 
 // The copyright displayed in application information
-// Developer: Mersad Karimi <mersadkarimi001@gmail.com>
-PRODUCT_COPYRIGHT = Copyright © 2026 Mersad Karimi. All rights reserved.
+PRODUCT_COPYRIGHT = © 2026 Jahan Bit

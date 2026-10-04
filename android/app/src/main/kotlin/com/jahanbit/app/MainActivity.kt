@@ -1,4 +1,4 @@
-package com.example.internet_management
+package com.jahanbit.app
 
 import io.flutter.embedding.android.FlutterActivity
 

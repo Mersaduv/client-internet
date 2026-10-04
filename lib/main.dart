@@ -19,6 +19,7 @@ import 'screens/internet_packages_screen.dart';
 import 'screens/app_settings_screen.dart';
 import 'screens/wifi_settings_screen.dart';
 import 'screens/subscriber_help_screen.dart';
+import 'screens/legal_document_screen.dart';
 import 'services/mikrotik_service_manager.dart';
 import 'services/settings_service.dart';
 import 'services/network_info_service.dart';
@@ -266,6 +267,12 @@ class _MyAppState extends State<MyApp> {
             allowUrlChange: false,
           ),
           '/subscriber-help': (context) => const SubscriberHelpScreen(),
+          '/privacy-policy': (context) => const LegalDocumentScreen(
+            type: LegalDocumentType.privacyPolicy,
+          ),
+          '/terms-of-use': (context) => const LegalDocumentScreen(
+            type: LegalDocumentType.termsOfUse,
+          ),
         },
         builder: (context, child) {
           final mediaQuery = MediaQuery.of(context);

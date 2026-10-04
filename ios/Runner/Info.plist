@@ -23,7 +23,7 @@
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>Copyright © 2026 Mersad Karimi. All rights reserved.</string>
+	<string>© 2026 Jahan Bit</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
@@ -47,13 +47,15 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
-	<!-- اجازه HTTP برای پنل سرویس اینترنت و وای‌فای (WKWebView / ATS) -->
+	<!-- توضیح دسترسی شبکه محلی برای اتصال به روتر MikroTik (الزام iOS) -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Jahan Bit needs local network access to find your default gateway and connect to your MikroTik router so you can manage connected devices, Wi‑Fi, and your ISP subscriber panel.</string>
+	<!-- رمزنگاری استاندارد HTTPS/TLS — بدون رمزنگاری سفارشی معاف‌نشده -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<!-- ATS: بدون ArbitraryLoads سراسری؛ فقط شبکه محلی + استثنای میزبان‌های پنل -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<key>NSAllowsArbitraryLoads</key>
-		<true/>
-		<key>NSAllowsArbitraryLoadsInWebContent</key>
-		<true/>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 		<key>NSExceptionDomains</key>

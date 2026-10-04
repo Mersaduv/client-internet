@@ -527,6 +527,80 @@ class _AppSettingsScreenState extends State<AppSettingsScreen> {
               ),
             ),
             const SizedBox(height: 24),
+            Card(
+              elevation: 2,
+              color: colorScheme.surface,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                children: [
+                  ListTile(
+                    leading: Icon(Icons.privacy_tip_outlined, color: primaryColor),
+                    title: Text(
+                      l10n?.privacyPolicy ?? 'Privacy Policy',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                    trailing: Icon(
+                      Icons.arrow_forward_ios,
+                      size: 16,
+                      color: primaryColor,
+                    ),
+                    onTap: () {
+                      Navigator.of(context).pushNamed('/privacy-policy');
+                    },
+                  ),
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: Icon(Icons.description_outlined, color: primaryColor),
+                    title: Text(
+                      l10n?.termsOfUse ?? 'Terms of Use',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                    trailing: Icon(
+                      Icons.arrow_forward_ios,
+                      size: 16,
+                      color: primaryColor,
+                    ),
+                    onTap: () {
+                      Navigator.of(context).pushNamed('/terms-of-use');
+                    },
+                  ),
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: Icon(Icons.delete_forever_outlined, color: primaryColor),
+                    title: Text(
+                      l10n?.clearLocalData ?? 'Clear local data',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                    subtitle: Text(
+                      l10n?.clearLocalDataSubtitle ??
+                          'Remove saved router credentials and preferences',
+                      style: TextStyle(
+                        color: Colors.grey.shade600,
+                        fontSize: 14,
+                      ),
+                    ),
+                    trailing: Icon(
+                      Icons.arrow_forward_ios,
+                      size: 16,
+                      color: primaryColor,
+                    ),
+                    onTap: _handleClearLocalData,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
             // ????
             Card(
               elevation: 2,
@@ -555,6 +629,53 @@ class _AppSettingsScreenState extends State<AppSettingsScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _handleClearLocalData() async {
+    final l10n = AppLocalizations.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n?.clearLocalData ?? 'Clear local data'),
+        content: Text(
+          l10n?.clearLocalDataConfirm ??
+              'This permanently deletes locally stored credentials and preferences on this device. Continue?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(l10n?.cancel ?? 'Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: Text(l10n?.delete ?? 'Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    final provider = Provider.of<ClientsProvider>(context, listen: false);
+    provider.clear();
+    _serviceManager.disconnect();
+    await _settingsService.clearAllLocalData();
+
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final nav = Navigator.of(context);
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(l10n?.clearLocalDataDone ?? 'Local data cleared'),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: _primaryColor,
+      ),
+    );
+    nav.pushNamedAndRemoveUntil('/login', (route) => false);
   }
 
   Future<void> _handleLogout() async {

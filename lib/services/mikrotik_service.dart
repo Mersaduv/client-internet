@@ -3508,7 +3508,8 @@ class MikroTikService {
   }) async {
     await ensureConnected();
 
-    const scriptName = '_ariyabod_wifi_update';
+    const scriptName = '_jahanbit_wifi_update';
+    const legacyScriptName = '_ariyabod_wifi_update';
     final wlan = interfaceName.trim().isEmpty ? 'wlan1' : interfaceName.trim();
     final profile = profileName.trim().isEmpty ? 'default' : profileName.trim();
 
@@ -3560,6 +3561,24 @@ class MikroTikService {
     } catch (_) {
       debugPrint('[WIFI_SETTINGS] No leftover script to remove');
     }
+
+    // پاک‌سازی نام اسکریپت قدیمی برای جلوگیری از ابهام برند
+    try {
+      final legacy = await _talk([
+        '/system/script/print',
+        '?name=$legacyScriptName',
+        _proplist(['.id', 'name']),
+      ]).timeout(const Duration(seconds: 5));
+      for (final entry in legacy) {
+        final id = entry['.id'];
+        if (id != null && id.isNotEmpty) {
+          await _talk([
+            '/system/script/remove',
+            '=.id=$id',
+          ]).timeout(const Duration(seconds: 5));
+        }
+      }
+    } catch (_) {}
 
     try {
       await _talk([

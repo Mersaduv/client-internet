@@ -8,6 +8,7 @@ import '../data/internet_packages_data.dart';
 import '../services/settings_service.dart';
 import '../utils/app_localizations.dart';
 import '../utils/app_theme.dart';
+import '../utils/webview_host_allowlist.dart';
 import '../widgets/province_selector.dart';
 
 /// بعد از بارگذاری، محدودیت viewport (مثل user-scalable=no) را شل می‌کند تا pinch روی اندروید و iOS جواب بدهد.
@@ -49,7 +50,7 @@ class InternetServiceScreen extends StatefulWidget {
     super.key,
     this.fixedUrl,
     this.defaultTitle,
-    this.allowUrlChange = true,
+    this.allowUrlChange = false,
   });
 
   /// در صورت تنظیم، این آدرس به‌جای URL ولایت بارگذاری می‌شود.
@@ -145,6 +146,20 @@ class _InternetServiceScreenState extends State<InternetServiceScreen> {
     required bool persist,
   }) async {
     final url = province.servicePanelUrl;
+    if (!WebViewHostAllowlist.isAllowedUrl(url)) {
+      if (!mounted) return;
+      setState(() {
+        _province = province;
+        _currentUrl = null;
+        _loadingProvince = false;
+        _pickerVisible = false;
+        _isLoading = false;
+        _showError = true;
+        _errorMessage =
+            'آدرس پنل این ولایت مجاز نیست. با پشتیبانی جهان بیت تماس بگیرید.';
+      });
+      return;
+    }
     if (!mounted) return;
 
     final previousUrl = _currentUrl;
@@ -185,9 +200,21 @@ class _InternetServiceScreenState extends State<InternetServiceScreen> {
     try {
       final resolved = (widget.fixedUrl ?? await _settingsService.getServiceUrl())
           .trim();
-      final url = resolved.isEmpty
+      var url = resolved.isEmpty
           ? SettingsService.defaultServiceUrl
           : resolved;
+      if (!WebViewHostAllowlist.isAllowedUrl(url)) {
+        if (mounted) {
+          setState(() {
+            _currentUrl = null;
+            _isLoading = false;
+            _showError = true;
+            _errorMessage =
+                'فقط پنل‌های تأیید‌شدهٔ سرویس اینترنت قابل نمایش هستند.';
+          });
+        }
+        return;
+      }
       final previous = _currentUrl;
       if (mounted) {
         setState(() {
@@ -210,9 +237,12 @@ class _InternetServiceScreenState extends State<InternetServiceScreen> {
         setState(() {
           _currentUrl ??=
               widget.fixedUrl ?? SettingsService.defaultServiceUrl;
-          if (_currentUrl == null || _currentUrl!.isEmpty) {
+          if (_currentUrl == null ||
+              _currentUrl!.isEmpty ||
+              !WebViewHostAllowlist.isAllowedUrl(_currentUrl)) {
             _errorMessage = 'خطا در بارگذاری URL: $e';
             _showError = true;
+            _currentUrl = null;
           }
         });
       }
@@ -320,6 +350,19 @@ class _InternetServiceScreenState extends State<InternetServiceScreen> {
 
     if (result != null && result.isNotEmpty) {
       final url = _normalizeServiceUrl(result);
+      if (!WebViewHostAllowlist.isAllowedUrl(url)) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'فقط آدرس پنل‌های تأیید‌شدهٔ جهان بیت مجاز است.',
+              ),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+        return;
+      }
       await _settingsService.setServiceUrl(url);
 
       if (_webViewController != null) {
@@ -446,7 +489,7 @@ class _InternetServiceScreenState extends State<InternetServiceScreen> {
                   javaScriptEnabled: true,
                   domStorageEnabled: true,
                   databaseEnabled: true,
-                  javaScriptCanOpenWindowsAutomatically: true,
+                  javaScriptCanOpenWindowsAutomatically: false,
                   useHybridComposition: true,
                   useShouldOverrideUrlLoading: true,
                   mediaPlaybackRequiresUserGesture: false,
@@ -541,7 +584,12 @@ class _InternetServiceScreenState extends State<InternetServiceScreen> {
                   }
                 },
                 shouldOverrideUrlLoading: (controller, navigationAction) async {
-                  return NavigationActionPolicy.ALLOW;
+                  final requestUrl = navigationAction.request.url?.toString();
+                  if (WebViewHostAllowlist.isAllowedUrl(requestUrl)) {
+                    return NavigationActionPolicy.ALLOW;
+                  }
+                  debugPrint('[WEBVIEW] blocked navigation: $requestUrl');
+                  return NavigationActionPolicy.CANCEL;
                 },
               ),
             )

@@ -30,6 +30,24 @@ class RouterOSClient {
     this.port = MikroTikConnection.apiPort,
   });
 
+  static bool _isPrivateLanHost(String host) {
+    final normalized = host.trim().toLowerCase();
+    if (normalized == 'localhost' || normalized == '::1') return true;
+    final ip = InternetAddress.tryParse(normalized);
+    if (ip == null) return false;
+    if (ip.type != InternetAddressType.IPv4) {
+      return ip.isLoopback || ip.isLinkLocal;
+    }
+    final parts = ip.address.split('.').map(int.parse).toList();
+    if (parts.length != 4) return false;
+    if (parts[0] == 10) return true;
+    if (parts[0] == 192 && parts[1] == 168) return true;
+    if (parts[0] == 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+    if (parts[0] == 127) return true;
+    if (parts[0] == 169 && parts[1] == 254) return true;
+    return false;
+  }
+
   /// اتصال و احراز هویت
   Future<bool> login() async {
     try {
@@ -41,7 +59,8 @@ class RouterOSClient {
         _socket = await SecureSocket.connect(
           address,
           actualPort,
-          onBadCertificate: (_) => true, // برای self-signed certificates
+          // فقط گواهی self-signed روترهای LAN خصوصی؛ نه میزبان‌های عمومی
+          onBadCertificate: (_) => _isPrivateLanHost(address),
         );
       } else {
         _socket = await Socket.connect(

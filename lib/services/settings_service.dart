@@ -3,6 +3,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/mikrotik_connection.dart';
+import '../utils/webview_host_allowlist.dart';
 
 /// سرویس برای مدیریت تنظیمات اتصال MikroTik
 class SettingsService {
@@ -37,9 +38,10 @@ class SettingsService {
   static const bool _defaultUseSsl = false;
   /// آدرس پیش‌فرض پنل کاربری سرویس اینترنت
   static const String _defaultServiceUrl = 'http://165.99.189.40:9394/users/';
+  /// URL قدیمی ذخیره‌شده روی بعضی دستگاه‌ها — فقط برای مهاجرت
   static const String _legacyDefaultServiceUrl = 'http://user.ariyabod.af/users';
-  static const String _defaultLanguage = 'fa'; // 默认语言：波斯语
-  static const String _defaultThemeMode = 'dark'; // پیش‌فرض: دارک‌مود cosmic
+  static const String _defaultLanguage = 'fa';
+  static const String _defaultThemeMode = 'dark';
 
   // Cache برای تنظیمات (برای جلوگیری از خطا در صورت مشکل shared_preferences)
   String? _cachedHost;
@@ -140,17 +142,21 @@ class SettingsService {
   /// آدرس پیش‌فرض عمومی پنل سرویس اینترنت
   static String get defaultServiceUrl => _defaultServiceUrl;
 
-  /// دریافت URL سرویس اینترنت (در صورت خالی/قدیمی → پیش‌فرض فعلی)
+  /// دریافت URL سرویس اینترنت (در صورت خالی/قدیمی/غیرمجاز → پیش‌فرض فعلی)
   Future<String> getServiceUrl() async {
-    if (_cachedServiceUrl != null && _cachedServiceUrl!.trim().isNotEmpty) {
+    if (_cachedServiceUrl != null &&
+        _cachedServiceUrl!.trim().isNotEmpty &&
+        WebViewHostAllowlist.isAllowedUrl(_cachedServiceUrl)) {
       return _cachedServiceUrl!;
     }
 
     try {
       final prefs = await SharedPreferences.getInstance();
       var url = (prefs.getString(_keyServiceUrl) ?? '').trim();
-      // لینک خالی یا قدیمی را با پیش‌فرض جدید جایگزین کن
-      if (url.isEmpty || _isLegacyDefaultServiceUrl(url)) {
+      // لینک خالی، قدیمی یا خارج از allowlist را با پیش‌فرض جایگزین کن
+      if (url.isEmpty ||
+          _isLegacyDefaultServiceUrl(url) ||
+          !WebViewHostAllowlist.isAllowedUrl(url)) {
         url = _defaultServiceUrl;
         await prefs.setString(_keyServiceUrl, url);
       }
@@ -168,12 +174,16 @@ class SettingsService {
     return normalized == legacy;
   }
 
-  /// ذخیره URL سرویس اینترنت
+  /// ذخیره URL سرویس اینترنت — فقط میزبان‌های allowlist
   Future<void> setServiceUrl(String url) async {
-    _cachedServiceUrl = url;
+    final trimmed = url.trim();
+    if (!WebViewHostAllowlist.isAllowedUrl(trimmed)) {
+      throw ArgumentError('URL خارج از فهرست میزبان‌های مجاز پنل است');
+    }
+    _cachedServiceUrl = trimmed;
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_keyServiceUrl, url);
+      await prefs.setString(_keyServiceUrl, trimmed);
     } catch (e) {
       // اگر shared_preferences کار نکرد، فقط در حافظه نگه دار
     }
@@ -278,6 +288,46 @@ class SettingsService {
   Future<void> clearCredentials() async {
     await _secureStorage.delete(key: _keyUsername);
     await _secureStorage.delete(key: _keyPassword);
+  }
+
+  /// پاک‌سازی کامل داده‌های محلی اپ (حریم خصوصی / معادل حذف دادهٔ روی دستگاه)
+  Future<void> clearAllLocalData() async {
+    await clearCredentials();
+    await clearLoginTimestamp();
+    _cachedHost = null;
+    _cachedPort = null;
+    _cachedUseSsl = null;
+    _cachedServiceUrl = null;
+    _cachedLanguage = null;
+    _cachedThemeMode = null;
+    _cachedPackageProvince = null;
+    packageProvinceListenable.value = null;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_keyHost);
+      await prefs.remove(_keyPort);
+      await prefs.remove(_keyUseSsl);
+      await prefs.remove(_keyServiceUrl);
+      await prefs.remove(_keyLoginTimestamp);
+      await prefs.remove(_keyRememberMe);
+      await prefs.remove(_keyLanguage);
+      await prefs.remove(_keyThemeMode);
+      await prefs.remove(_keyPackageProvince);
+      await prefs.remove('banned_device_fingerprints');
+      // اثر انگشت/مسدودسازی محلی دستگاه‌ها اگر با کلیدهای prefs ذخیره شده باشند
+      for (final key in prefs.getKeys().toList()) {
+        if (key.startsWith('ban_') ||
+            key.startsWith('fingerprint_') ||
+            key.startsWith('client_') ||
+            key.startsWith('device_') ||
+            key.startsWith('traffic_')) {
+          await prefs.remove(key);
+        }
+      }
+    } catch (_) {
+      // فقط cache را پاک کردیم
+    }
   }
 
   /// session معتبر: login_timestamp وجود دارد و کمتر از ۱۴ روز گذشته

@@ -54,6 +54,24 @@ class AppLocalizations {
       : 'آیا مطمئن هستید که می‌خواهید از حساب کاربری خارج شوید؟';
   String get cancel => locale.languageCode == 'en' ? 'Cancel' : 'لغو';
 
+  String get privacyPolicy =>
+      locale.languageCode == 'en' ? 'Privacy Policy' : 'سیاست حریم خصوصی';
+  String get termsOfUse =>
+      locale.languageCode == 'en' ? 'Terms of Use' : 'شرایط استفاده';
+  String get legalSection =>
+      locale.languageCode == 'en' ? 'Legal & Privacy' : 'حریم خصوصی و قوانین';
+  String get clearLocalData =>
+      locale.languageCode == 'en' ? 'Clear local data' : 'پاک‌سازی داده‌های محلی';
+  String get clearLocalDataSubtitle => locale.languageCode == 'en'
+      ? 'Remove saved router credentials and app preferences from this device'
+      : 'حذف اعتبارنامهٔ روتر و تنظیمات ذخیره‌شده از این دستگاه';
+  String get clearLocalDataConfirm => locale.languageCode == 'en'
+      ? 'This permanently deletes locally stored credentials and preferences on this device. Continue?'
+      : 'این کار اعتبارنامه‌ها و تنظیمات ذخیره‌شده روی این دستگاه را برای همیشه پاک می‌کند. ادامه می‌دهید؟';
+  String get clearLocalDataDone => locale.languageCode == 'en'
+      ? 'Local data cleared'
+      : 'داده‌های محلی پاک شد';
+
   // 连接设置
   String get mikrotikRouterOS => locale.languageCode == 'en'
       ? 'MikroTik RouterOS Settings'

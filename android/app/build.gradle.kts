@@ -1,5 +1,8 @@
 // Developer: Mersad Karimi <mersadkarimi001@gmail.com>
 
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -7,8 +10,14 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("app/key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+}
+
 android {
-    namespace = "com.example.internet_management"
+    namespace = "com.jahanbit.app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -22,36 +31,48 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.internet_management"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
-        // حداقل SDK 19 برای flutter_inappwebview
-        minSdk = maxOf(flutter.minSdkVersion, 21)
+        applicationId = "com.jahanbit.app"
+        // حداقل SDK برای flutter_inappwebview و الزامات فروشگاه
+        minSdk = maxOf(flutter.minSdkVersion, 24)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
 
-    buildTypes {
-        release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+    signingConfigs {
+        create("release") {
+            if (keystorePropertiesFile.exists()) {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+            }
         }
     }
 
-    // تنظیم نام خودکار فایل APK/AAB
-    // Developer: Mersad Karimi <mersadkarimi001@gmail.com>
+    buildTypes {
+        release {
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                // بدون key.properties بیلد release امضا نمی‌شود تا اشتباهاً debug آپلود نشود.
+                throw GradleException(
+                    "Missing android/app/key.properties. Copy key.properties.example and configure the upload keystore before releasing.",
+                )
+            }
+            isMinifyEnabled = false
+            isShrinkResources = false
+        }
+    }
+
     // فرمت خروجی: Jahan_Bit-v1.0.0(1)-release.apk
-    // این کد به صورت خودکار نام فایل APK را بر اساس نام برنامه، نسخه و نوع build تنظیم می‌کند
     applicationVariants.all {
         val variant = this
         val appName = "Jahan_Bit"
         val versionName = variant.versionName
         val versionCode = variant.versionCode
         val buildType = variant.buildType.name
-        
+
         variant.outputs.all {
             val outputFileName = "${appName}-v${versionName}(${versionCode})-${buildType}.apk"
             (this as com.android.build.gradle.internal.api.BaseVariantOutputImpl).outputFileName = outputFileName
