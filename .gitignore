@@ -11,7 +11,17 @@
 .svn/
 .swiftpm/
 migrate_working_dir/
-
+dist/
+dist_windows/
+dist_macos/
+dist_linux/
+dist_ios/
+dist_android/
+dist_web/
+dist_flutter/
+dist_flutter_web/
+dist_flutter_ios/
+dist_flutter_android/
 # IntelliJ related
 *.iml
 *.ipr
@@ -31,6 +41,7 @@ migrate_working_dir/
 .pub-cache/
 .pub/
 /build/
+
 /coverage/
 
 # Symbolication related
