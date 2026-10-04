@@ -143,6 +143,8 @@ class MikroTikServiceManager {
     _progressiveLoadActive = false;
   }
 
+  bool get isProgressiveLoadActive => _progressiveLoadActive;
+
   void beginProgressiveLoad() {
     _progressiveLoadActive = true;
     _heartbeat?.stop();

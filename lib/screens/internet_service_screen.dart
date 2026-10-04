@@ -3,8 +3,12 @@ import 'dart:collection';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+
+import '../data/internet_packages_data.dart';
 import '../services/settings_service.dart';
+import '../utils/app_localizations.dart';
 import '../utils/app_theme.dart';
+import '../widgets/province_selector.dart';
 
 /// بعد از بارگذاری، محدودیت viewport (مثل user-scalable=no) را شل می‌کند تا pinch روی اندروید و iOS جواب بدهد.
 const String _kUnrestrictViewportForPinchZoom = r'''
@@ -48,7 +52,7 @@ class InternetServiceScreen extends StatefulWidget {
     this.allowUrlChange = true,
   });
 
-  /// در صورت تنظیم، این آدرس به‌جای URL ذخیره‌شده در تنظیمات بارگذاری می‌شود.
+  /// در صورت تنظیم، این آدرس به‌جای URL ولایت بارگذاری می‌شود.
   final String? fixedUrl;
   final String? defaultTitle;
   final bool allowUrlChange;
@@ -62,14 +66,18 @@ class _InternetServiceScreenState extends State<InternetServiceScreen> {
   final SettingsService _settingsService = SettingsService();
 
   bool _isLoading = true;
+  bool _loadingProvince = true;
+  bool _pickerVisible = false;
+  PackageProvince? _province;
   double _progress = 0.0;
-  /// بلافاصله با پیش‌فرض شناخته‌شده شروع می‌شود تا صفحه خالی دیده نشود
   String? _currentUrl;
   String? _pageTitle;
   bool _canGoBack = false;
   bool _canGoForward = false;
   String? _errorMessage;
   bool _showError = false;
+
+  bool get _usesProvinceFlow => widget.fixedUrl == null;
 
   bool get _preferDesktopExperience =>
       !kIsWeb &&
@@ -80,18 +88,100 @@ class _InternetServiceScreenState extends State<InternetServiceScreen> {
   @override
   void initState() {
     super.initState();
-    // برای تب سرویس اینترنت، بلافاصله پیش‌فرض را نشان بده
-    if (widget.fixedUrl == null) {
-      _currentUrl = SettingsService.defaultServiceUrl;
-      _isLoading = true;
+    if (_usesProvinceFlow) {
+      _settingsService.packageProvinceListenable
+          .addListener(_onSharedProvinceChanged);
+      _bootstrapProvinceFlow();
     } else {
+      _loadingProvince = false;
       _currentUrl = widget.fixedUrl;
       _isLoading = widget.fixedUrl!.trim().isNotEmpty;
+      _loadFixedOrStoredUrl();
     }
-    _loadUrl();
   }
 
-  Future<void> _loadUrl() async {
+  @override
+  void dispose() {
+    if (_usesProvinceFlow) {
+      _settingsService.packageProvinceListenable
+          .removeListener(_onSharedProvinceChanged);
+    }
+    _webViewController?.dispose();
+    super.dispose();
+  }
+
+  void _onSharedProvinceChanged() {
+    if (!_usesProvinceFlow || !mounted) return;
+    final next = PackageProvinceX.tryParse(
+      _settingsService.packageProvinceListenable.value,
+    );
+    if (next == null || next == _province) return;
+    _applyProvince(next, persist: false);
+  }
+
+  Future<void> _bootstrapProvinceFlow() async {
+    final savedId = await _settingsService.getPackageProvinceId();
+    final saved = PackageProvinceX.tryParse(savedId);
+    if (!mounted) return;
+
+    if (saved == null) {
+      setState(() {
+        _province = null;
+        _currentUrl = null;
+        _loadingProvince = false;
+        _pickerVisible = true;
+        _isLoading = false;
+        _showError = false;
+        _errorMessage = null;
+      });
+      return;
+    }
+
+    await _applyProvince(saved, persist: false);
+  }
+
+  Future<void> _applyProvince(
+    PackageProvince province, {
+    required bool persist,
+  }) async {
+    final url = province.servicePanelUrl;
+    if (!mounted) return;
+
+    final previousUrl = _currentUrl;
+    setState(() {
+      _province = province;
+      _currentUrl = url;
+      _loadingProvince = false;
+      _pickerVisible = false;
+      _errorMessage = null;
+      _showError = false;
+      _isLoading = true;
+      _progress = 0.0;
+      _pageTitle = null;
+      _canGoBack = false;
+      _canGoForward = false;
+      if (previousUrl != url) {
+        _webViewController = null;
+      }
+    });
+
+    // بعد از setState تا listener با ولایت فعلی هم‌خوان باشد و دوباره صدا نزند
+    if (persist) {
+      await _settingsService.setPackageProvinceId(province.id);
+    }
+    await _settingsService.setServiceUrl(url);
+
+    if (!mounted) return;
+    if (previousUrl == url && _webViewController != null) {
+      try {
+        await _webViewController!.reload();
+      } catch (e) {
+        debugPrint('province reload: $e');
+      }
+    }
+  }
+
+  Future<void> _loadFixedOrStoredUrl() async {
     try {
       final resolved = (widget.fixedUrl ?? await _settingsService.getServiceUrl())
           .trim();
@@ -107,7 +197,6 @@ class _InternetServiceScreenState extends State<InternetServiceScreen> {
           _isLoading = url.isNotEmpty;
         });
       }
-      // اگر WebView قبلاً با پیش‌فرض ساخته شده و URL واقعی فرق دارد، دوباره بارگذاری کن
       if (_webViewController != null &&
           previous != null &&
           previous != url &&
@@ -131,10 +220,18 @@ class _InternetServiceScreenState extends State<InternetServiceScreen> {
   }
 
   Future<void> _reload() async {
+    if (_usesProvinceFlow && _province == null) {
+      setState(() => _pickerVisible = true);
+      return;
+    }
     if (_webViewController != null) {
       await _webViewController!.reload();
+      return;
+    }
+    if (_usesProvinceFlow && _province != null) {
+      await _applyProvince(_province!, persist: false);
     } else {
-      await _loadUrl();
+      await _loadFixedOrStoredUrl();
     }
   }
 
@@ -188,7 +285,9 @@ class _InternetServiceScreenState extends State<InternetServiceScreen> {
     if (!widget.allowUrlChange) return;
 
     final urlController = TextEditingController(
-      text: _currentUrl ?? SettingsService.defaultServiceUrl,
+      text: _currentUrl ??
+          _province?.servicePanelUrl ??
+          SettingsService.defaultServiceUrl,
     );
 
     final result = await showDialog<String>(
@@ -221,8 +320,6 @@ class _InternetServiceScreenState extends State<InternetServiceScreen> {
 
     if (result != null && result.isNotEmpty) {
       final url = _normalizeServiceUrl(result);
-
-      // ذخیره URL در تنظیمات
       await _settingsService.setServiceUrl(url);
 
       if (_webViewController != null) {
@@ -250,6 +347,11 @@ class _InternetServiceScreenState extends State<InternetServiceScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final primaryColor = AppTheme.primaryFor(theme.brightness);
+    final l10n = AppLocalizations.of(context);
+    final isEnglish = l10n?.locale.languageCode == 'en';
+    final onAppBar = AppTheme.onAppBar(theme.brightness);
+    final titleText =
+        _pageTitle ?? widget.defaultTitle ?? l10n?.internetService ?? 'سرویس انترنت';
 
     return Scaffold(
       appBar: PreferredSize(
@@ -260,8 +362,8 @@ class _InternetServiceScreenState extends State<InternetServiceScreen> {
             boxShadow: [
               BoxShadow(
                 color: theme.brightness == Brightness.dark
-                    ? Colors.black.withOpacity(0.3)
-                    : Colors.black.withOpacity(0.05),
+                    ? Colors.black.withValues(alpha: 0.3)
+                    : Colors.black.withValues(alpha: 0.05),
                 blurRadius: 10,
                 offset: const Offset(0, 2),
               ),
@@ -269,32 +371,39 @@ class _InternetServiceScreenState extends State<InternetServiceScreen> {
           ),
           child: AppBar(
             title: Text(
-              _pageTitle ?? widget.defaultTitle ?? 'سرویس انترنت',
+              titleText,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: AppTheme.onAppBar(theme.brightness),
-              ),
+              style: TextStyle(color: onAppBar),
             ),
             backgroundColor: Colors.transparent,
-            foregroundColor: AppTheme.onAppBar(theme.brightness),
-            iconTheme: IconThemeData(color: AppTheme.onAppBar(theme.brightness)),
+            foregroundColor: onAppBar,
+            iconTheme: IconThemeData(color: onAppBar),
             elevation: 0,
             shadowColor: Colors.transparent,
             surfaceTintColor: Colors.transparent,
             actions: [
-              // دکمه بازگشت
+              if (_usesProvinceFlow && _province != null)
+                Padding(
+                  padding: const EdgeInsetsDirectional.only(end: 4),
+                  child: Center(
+                    child: ProvinceDropdown(
+                      value: _province!,
+                      isEnglish: isEnglish,
+                      compact: true,
+                      onChanged: (p) => _applyProvince(p, persist: true),
+                    ),
+                  ),
+                ),
               IconButton(
                 icon: const Icon(Icons.arrow_back),
                 onPressed: _canGoBack ? _goBack : null,
                 tooltip: 'بازگشت',
               ),
-              // دکمه جلو
               IconButton(
                 icon: const Icon(Icons.arrow_forward),
                 onPressed: _canGoForward ? _goForward : null,
                 tooltip: 'جلو',
               ),
-              // دکمه رفرش
               IconButton(
                 icon: const Icon(Icons.refresh),
                 onPressed: _reload,
@@ -312,140 +421,131 @@ class _InternetServiceScreenState extends State<InternetServiceScreen> {
       ),
       body: Stack(
         children: [
-          // WebView — فقط وقتی URL تنظیم شده باشد
-          if (!_showError && _currentUrl != null && _currentUrl!.isNotEmpty)
-            InAppWebView(
-              preventGestureDelay: true,
-              initialUserScripts: UnmodifiableListView<UserScript>([
-                UserScript(
-                  groupName: 'pinch_zoom_viewport',
-                  source: _kUnrestrictViewportForPinchZoom,
-                  injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END,
-                ),
-              ]),
-              initialUrlRequest: URLRequest(url: WebUri(_currentUrl!)),
-              initialSettings: InAppWebViewSettings(
-                // فعال‌سازی JavaScript
-                javaScriptEnabled: true,
-                // فعال‌سازی DOM Storage
-                domStorageEnabled: true,
-                // فعال‌سازی Database
-                databaseEnabled: true,
-                // فعال‌سازی Local Storage
-                javaScriptCanOpenWindowsAutomatically: true,
-                // پشتیبانی از تمام ویژگی‌های وب
-                useHybridComposition: true,
-                // پشتیبانی از فایل‌ها
-                useShouldOverrideUrlLoading: true,
-                // پشتیبانی از Media Playback
-                mediaPlaybackRequiresUserGesture: false,
-                // پشتیبانی از Geolocation
-                allowsInlineMediaPlayback: true,
-                // پشتیبانی از File Access
-                allowsBackForwardNavigationGestures: true,
-                // تنظیمات User Agent
-                userAgent: _preferDesktopExperience
-                    ? null
-                    : 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36',
-                // زوم با دو انگشت (pinch) — روی اندروید builtInZoomControls باید true باشد
-                supportZoom: true,
-                builtInZoomControls: true,
-                // دکمه‌های +/- سیستم را نشان نده؛ فقط pinch کافی است
-                displayZoomControls: false,
-                // iOS: پیش‌فرض کتابخانه min/max=1.0 است و pinch را عملاً غیرفعال می‌کند
-                minimumZoomScale: 0.25,
-                maximumZoomScale: 5.0,
-                // نادیده گرفتن user-scalable=no و محدودیت scale در صفحه
-                ignoresViewportScaleLimits: true,
+          if (_loadingProvince)
+            const Center(child: CircularProgressIndicator())
+          else if (!_showError &&
+              _currentUrl != null &&
+              _currentUrl!.isNotEmpty)
+            KeyedSubtree(
+              key: ValueKey(
+                _usesProvinceFlow
+                    ? 'svc-${_province?.id ?? 'none'}-$_currentUrl'
+                    : 'fixed-$_currentUrl',
               ),
-              onWebViewCreated: (controller) {
-                _webViewController = controller;
-              },
-              onLoadStart: (controller, url) {
-                setState(() {
-                  _isLoading = true;
-                  _progress = 0.0;
-                  _showError = false;
-                  _errorMessage = null;
-                });
-              },
-              onLoadStop: (controller, url) async {
-                setState(() {
-                  _isLoading = false;
-                  _currentUrl = url.toString();
-                });
+              child: InAppWebView(
+                preventGestureDelay: true,
+                initialUserScripts: UnmodifiableListView<UserScript>([
+                  UserScript(
+                    groupName: 'pinch_zoom_viewport',
+                    source: _kUnrestrictViewportForPinchZoom,
+                    injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END,
+                  ),
+                ]),
+                initialUrlRequest: URLRequest(url: WebUri(_currentUrl!)),
+                initialSettings: InAppWebViewSettings(
+                  javaScriptEnabled: true,
+                  domStorageEnabled: true,
+                  databaseEnabled: true,
+                  javaScriptCanOpenWindowsAutomatically: true,
+                  useHybridComposition: true,
+                  useShouldOverrideUrlLoading: true,
+                  mediaPlaybackRequiresUserGesture: false,
+                  allowsInlineMediaPlayback: true,
+                  allowsBackForwardNavigationGestures: true,
+                  userAgent: _preferDesktopExperience
+                      ? null
+                      : 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36',
+                  supportZoom: true,
+                  builtInZoomControls: true,
+                  displayZoomControls: false,
+                  minimumZoomScale: 0.25,
+                  maximumZoomScale: 5.0,
+                  ignoresViewportScaleLimits: true,
+                ),
+                onWebViewCreated: (controller) {
+                  _webViewController = controller;
+                },
+                onLoadStart: (controller, url) {
+                  setState(() {
+                    _isLoading = true;
+                    _progress = 0.0;
+                    _showError = false;
+                    _errorMessage = null;
+                  });
+                },
+                onLoadStop: (controller, url) async {
+                  setState(() {
+                    _isLoading = false;
+                    _currentUrl = url.toString();
+                  });
 
-                try {
-                  // دریافت عنوان صفحه
-                  final title = await controller.getTitle();
-                  if (title != null && mounted) {
-                    setState(() {
-                      _pageTitle = title;
-                    });
-                  }
-
-                  // بررسی قابلیت‌های ناوبری (با try-catch برای جلوگیری از خطا)
                   try {
-                    final canGoBack = await controller.canGoBack();
-                    final canGoForward = await controller.canGoForward();
-                    if (mounted) {
+                    final title = await controller.getTitle();
+                    if (title != null && mounted) {
                       setState(() {
-                        _canGoBack = canGoBack;
-                        _canGoForward = canGoForward;
+                        _pageTitle = title;
                       });
                     }
-                  } catch (e) {
-                    // در صورت خطا، مقادیر پیش‌فرض را تنظیم کن
-                    if (mounted) {
-                      setState(() {
-                        _canGoBack = false;
-                        _canGoForward = false;
-                      });
-                    }
-                  }
 
-                  await _patchViewportForPinchZoom(controller);
-                } catch (e) {
-                  // خطا در دریافت اطلاعات صفحه - نادیده بگیر
-                  debugPrint('Error in onLoadStop: $e');
-                }
-              },
-              onProgressChanged: (controller, progress) {
-                setState(() {
-                  _progress = progress / 100;
-                });
-              },
-              onReceivedError: (controller, request, error) {
-                if (request.isForMainFrame == false) {
-                  return;
-                }
-                setState(() {
-                  _isLoading = false;
-                  _showError = true;
-                  _errorMessage = 'خطا در بارگذاری صفحه: ${error.description}';
-                });
-              },
-              onReceivedHttpError: (controller, request, response) {
-                if (request.isForMainFrame == false) {
-                  return;
-                }
-                final statusCode = response.statusCode;
-                if (statusCode != null && statusCode >= 400) {
+                    try {
+                      final canGoBack = await controller.canGoBack();
+                      final canGoForward = await controller.canGoForward();
+                      if (mounted) {
+                        setState(() {
+                          _canGoBack = canGoBack;
+                          _canGoForward = canGoForward;
+                        });
+                      }
+                    } catch (e) {
+                      if (mounted) {
+                        setState(() {
+                          _canGoBack = false;
+                          _canGoForward = false;
+                        });
+                      }
+                    }
+
+                    await _patchViewportForPinchZoom(controller);
+                  } catch (e) {
+                    debugPrint('Error in onLoadStop: $e');
+                  }
+                },
+                onProgressChanged: (controller, progress) {
+                  setState(() {
+                    _progress = progress / 100;
+                  });
+                },
+                onReceivedError: (controller, request, error) {
+                  if (request.isForMainFrame == false) {
+                    return;
+                  }
                   setState(() {
                     _isLoading = false;
                     _showError = true;
                     _errorMessage =
-                        'خطای HTTP $statusCode: ${response.reasonPhrase ?? "خطای ناشناخته"}';
+                        'خطا در بارگذاری صفحه: ${error.description}';
                   });
-                }
-              },
-              shouldOverrideUrlLoading: (controller, navigationAction) async {
-                // اجازه بارگذاری تمام URL ها
-                return NavigationActionPolicy.ALLOW;
-              },
+                },
+                onReceivedHttpError: (controller, request, response) {
+                  if (request.isForMainFrame == false) {
+                    return;
+                  }
+                  final statusCode = response.statusCode;
+                  if (statusCode != null && statusCode >= 400) {
+                    setState(() {
+                      _isLoading = false;
+                      _showError = true;
+                      _errorMessage =
+                          'خطای HTTP $statusCode: ${response.reasonPhrase ?? "خطای ناشناخته"}';
+                    });
+                  }
+                },
+                shouldOverrideUrlLoading: (controller, navigationAction) async {
+                  return NavigationActionPolicy.ALLOW;
+                },
+              ),
             )
           else if (_showError)
-            // صفحه خطا
             Center(
               child: Padding(
                 padding: const EdgeInsets.all(24.0),
@@ -475,6 +575,21 @@ class _InternetServiceScreenState extends State<InternetServiceScreen> {
                       ),
                       textAlign: TextAlign.center,
                     ),
+                    if (_usesProvinceFlow &&
+                        (_province == PackageProvince.nimroz ||
+                            _province == PackageProvince.farah)) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        isEnglish
+                            ? 'This panel is only reachable on the local network of that province.'
+                            : 'این پنل فقط روی شبکهٔ محلی همان ولایت در دسترس است.',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Colors.grey.shade600,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
                     const SizedBox(height: 24),
                     ElevatedButton.icon(
                       onPressed: _reload,
@@ -489,6 +604,23 @@ class _InternetServiceScreenState extends State<InternetServiceScreen> {
                         ),
                       ),
                     ),
+                    if (_usesProvinceFlow) ...[
+                      const SizedBox(height: 12),
+                      OutlinedButton.icon(
+                        onPressed: () =>
+                            setState(() => _pickerVisible = true),
+                        icon: const Icon(Icons.location_on_outlined),
+                        label: Text(isEnglish ? 'Change province' : 'تغییر ولایت'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: primaryColor,
+                          side: BorderSide(color: primaryColor),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 24,
+                            vertical: 12,
+                          ),
+                        ),
+                      ),
+                    ],
                     if (widget.allowUrlChange) ...[
                       const SizedBox(height: 12),
                       OutlinedButton.icon(
@@ -509,8 +641,9 @@ class _InternetServiceScreenState extends State<InternetServiceScreen> {
                 ),
               ),
             )
+          else if (_usesProvinceFlow && _province == null)
+            const SizedBox.shrink()
           else if (_currentUrl == null || _currentUrl!.isEmpty)
-            // بدون URL پیش‌فرض — درخواست ورود آدرس
             Center(
               child: Padding(
                 padding: const EdgeInsets.all(24.0),
@@ -561,11 +694,12 @@ class _InternetServiceScreenState extends State<InternetServiceScreen> {
               ),
             )
           else
-            // صفحه بارگذاری اولیه
             const Center(child: CircularProgressIndicator()),
 
-          // نوار پیشرفت بارگذاری
-          if (_isLoading && _progress > 0.0)
+          if (_isLoading &&
+              _progress > 0.0 &&
+              !_pickerVisible &&
+              _currentUrl != null)
             Positioned(
               top: 0,
               left: 0,
@@ -577,14 +711,24 @@ class _InternetServiceScreenState extends State<InternetServiceScreen> {
                 minHeight: 3,
               ),
             ),
+
+          if (_usesProvinceFlow && _pickerVisible)
+            ProvincePickerOverlay(
+              isEnglish: isEnglish,
+              requiredChoice: _province == null,
+              selected: _province,
+              subtitleFa:
+                  'پنل سرویس اینترنت بر اساس ولایت متفاوت است. انتخاب شما ذخیره می‌شود.',
+              subtitleEn:
+                  'The internet service panel differs by province. Your choice will be saved.',
+              onSelected: (province) =>
+                  _applyProvince(province, persist: true),
+              onDismiss: _province == null
+                  ? null
+                  : () => setState(() => _pickerVisible = false),
+            ),
         ],
       ),
     );
-  }
-
-  @override
-  void dispose() {
-    _webViewController?.dispose();
-    super.dispose();
   }
 }

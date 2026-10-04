@@ -46,6 +46,18 @@ extension PackageProvinceX on PackageProvince {
   }
 
   String title(bool isEnglish) => isEnglish ? titleEn() : titleFa();
+
+  /// آدرس پنل کاربری سرویس اینترنت همان ولایت
+  String get servicePanelUrl {
+    switch (this) {
+      case PackageProvince.herat:
+        return 'http://165.99.189.40:9394/users/';
+      case PackageProvince.nimroz:
+        return 'http://192.168.12.12/';
+      case PackageProvince.farah:
+        return 'http://192.168.10.10/';
+    }
+  }
 }
 
 /// کاتالوگ بسته‌های یک ولایت — استخراج‌شده از پوسترهای رسمی جهان بیت.

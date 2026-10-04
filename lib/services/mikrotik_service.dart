@@ -23,6 +23,9 @@ class MikroTikService {
   bool? _wirelessFeaturesEnabled;
   bool _reconnectInProgress = false;
   int _progressiveLoadDepth = 0;
+  List<Map<String, String>>? _managedBanRawRulesCache;
+  DateTime? _managedBanRawRulesCachedAt;
+  static const Duration _managedBanRulesCacheTtl = Duration(seconds: 45);
 
   static const Duration _apiTimeout = MikrotikTimeouts.defaultTalk;
   static const Duration _phaseTalkTimeout = MikrotikTimeouts.phaseTalk;
@@ -95,6 +98,11 @@ class MikroTikService {
       _progressiveLoadDepth--;
     }
     print('[PROGRESSIVE_LOAD] end (depth=$_progressiveLoadDepth)');
+  }
+
+  void invalidateManagedBanRawRulesCache() {
+    _managedBanRawRulesCache = null;
+    _managedBanRawRulesCachedAt = null;
   }
 
   Future<bool> _supportsWirelessFeatures() async {
@@ -1827,50 +1835,118 @@ class MikroTikService {
   }
 
   /// Phase 2a — managed ban raw rules.
-  Future<List<Map<String, String>>> getPhase2ManagedBanRawRules() async {
+  Future<List<Map<String, String>>> getPhase2ManagedBanRawRules({
+    bool forceRefresh = false,
+  }) async {
     await _requireConnection();
+
+    if (!forceRefresh &&
+        _managedBanRawRulesCache != null &&
+        _managedBanRawRulesCachedAt != null &&
+        DateTime.now().difference(_managedBanRawRulesCachedAt!) <
+            _managedBanRulesCacheTtl) {
+      return List<Map<String, String>>.from(_managedBanRawRulesCache!);
+    }
+
     try {
       final rules = await _talk([
         '/ip/firewall/raw/print',
         '?action=drop',
         _proplist([
           '.id',
+          'chain',
           'action',
           'src-address',
           'src-mac-address',
           'comment',
         ]),
       ], timeout: _phaseTalkTimeout);
-      return rules
+      final filtered = rules
           .where((rule) => _isManagedBanComment(rule['comment']))
           .toList();
+      _managedBanRawRulesCache = filtered;
+      _managedBanRawRulesCachedAt = DateTime.now();
+      return filtered;
     } catch (e) {
       print('[PROGRESSIVE_LOAD] phase2a drop filter failed: $e');
       final rules = await _talk([
         '/ip/firewall/raw/print',
         _proplist([
           '.id',
+          'chain',
           'action',
           'src-address',
           'src-mac-address',
           'comment',
         ]),
       ], timeout: _phaseTalkTimeout);
-      return rules
+      final filtered = rules
           .where(
             (rule) =>
                 rule['action']?.toLowerCase() == 'drop' &&
                 _isManagedBanComment(rule['comment']),
           )
           .toList();
+      _managedBanRawRulesCache = filtered;
+      _managedBanRawRulesCachedAt = DateTime.now();
+      return filtered;
     }
   }
 
   /// Unique banned devices from managed firewall raw drop rules (one API call).
+  ///
+  /// Groups by MAC (preferred) or IP — never by comment alone. Identical ban
+  /// reasons like "Manual ban" used to collapse many devices into one row.
   List<Map<String, dynamic>> _groupBannedFromRawRules(
     List<Map<String, String>> rawRules,
   ) {
-    final grouped = <String, Map<String, dynamic>>{};
+    final byMac = <String, Map<String, dynamic>>{};
+    final byIp = <String, Map<String, dynamic>>{};
+    final orphans = <Map<String, dynamic>>[];
+
+    Map<String, dynamic> newItem({
+      String? ip,
+      String? mac,
+      String? comment,
+    }) {
+      return {
+        'address': (ip != null && ip.isNotEmpty) ? ip : null,
+        'mac_address': mac,
+        'chains': <String>[],
+        'rule_ids': <String>[],
+        'comment': comment ?? '',
+        'raw_blocked': true,
+        'dhcp_blocked': false,
+        'wireless_blocked': false,
+      };
+    }
+
+    void mergeRule(Map<String, dynamic> item, Map<String, String> rule) {
+      final ip = rule['src-address']?.trim();
+      final mac = _normalizeMac(rule['src-mac-address']);
+      final chain = rule['chain'];
+      final comment = rule['comment'] ?? '';
+
+      if ((item['address'] == null || item['address'] == '') &&
+          ip != null &&
+          ip.isNotEmpty) {
+        item['address'] = ip;
+      }
+      if ((item['mac_address'] == null || item['mac_address'] == '') &&
+          mac != null) {
+        item['mac_address'] = mac;
+      }
+      if ((item['comment']?.toString().isEmpty ?? true) && comment.isNotEmpty) {
+        item['comment'] = comment;
+      }
+      if (chain != null && !(item['chains'] as List).contains(chain)) {
+        (item['chains'] as List).add(chain);
+      }
+      final id = rule['.id'];
+      if (id != null && !(item['rule_ids'] as List).contains(id)) {
+        (item['rule_ids'] as List).add(id);
+      }
+    }
 
     for (final rule in rawRules) {
       final action = rule['action']?.toLowerCase();
@@ -1887,45 +1963,59 @@ class MikroTikService {
 
       final ip = rule['src-address']?.trim();
       final mac = _normalizeMac(rule['src-mac-address']);
-      final commentKey = _managedBanCommentGroupKey(rule['comment']);
-      final key = commentKey.isNotEmpty
-          ? 'comment:$commentKey'
-          : (mac != null
-                ? 'mac:$mac'
-                : 'ip:${(ip != null && ip.isNotEmpty) ? ip : rule['.id']}');
+      final hasIp = ip != null && ip.isNotEmpty;
 
-      final item = grouped.putIfAbsent(key, () {
-        return {
-          'address': (ip != null && ip.isNotEmpty) ? ip : null,
-          'mac_address': mac,
-          'chains': <String>[],
-          'rule_ids': <String>[],
-          'comment': rule['comment'] ?? '',
-          'raw_blocked': true,
-          'dhcp_blocked': false,
-          'wireless_blocked': false,
-        };
-      });
+      Map<String, dynamic>? item;
+      if (mac != null && byMac.containsKey(mac)) {
+        item = byMac[mac];
+      } else if (hasIp && byIp.containsKey(ip)) {
+        item = byIp[ip];
+      }
 
-      if ((item['address'] == null || item['address'] == '') &&
-          ip != null &&
-          ip.isNotEmpty) {
-        item['address'] = ip;
+      if (item == null) {
+        item = newItem(ip: ip, mac: mac, comment: rule['comment']);
+        if (mac != null) {
+          byMac[mac] = item;
+        }
+        if (hasIp) {
+          byIp[ip] = item;
+        }
+        if (mac == null && !hasIp) {
+          orphans.add(item);
+        }
+      } else {
+        // Promote IP-only row to MAC key when MAC rule arrives (same device).
+        if (mac != null && !byMac.containsKey(mac)) {
+          byMac[mac] = item;
+        }
+        if (hasIp && !byIp.containsKey(ip)) {
+          byIp[ip] = item;
+        }
       }
-      if ((item['mac_address'] == null || item['mac_address'] == '') &&
-          mac != null) {
-        item['mac_address'] = mac;
-      }
-      if (chain != null && !(item['chains'] as List).contains(chain)) {
-        (item['chains'] as List).add(chain);
-      }
-      final id = rule['.id'];
-      if (id != null && !(item['rule_ids'] as List).contains(id)) {
-        (item['rule_ids'] as List).add(id);
-      }
+
+      mergeRule(item, rule);
     }
 
-    return grouped.values.toList();
+    final out = <Map<String, dynamic>>[];
+    void push(Map<String, dynamic> item) {
+      for (final existing in out) {
+        if (identical(existing, item)) {
+          return;
+        }
+      }
+      out.add(item);
+    }
+
+    for (final item in byMac.values) {
+      push(item);
+    }
+    for (final item in byIp.values) {
+      push(item);
+    }
+    for (final item in orphans) {
+      push(item);
+    }
+    return out;
   }
 
   /// Fast banned list: unique devices from raw drop rules only.
@@ -2118,7 +2208,8 @@ class MikroTikService {
       final reason = (comment == null || comment.trim().isEmpty)
           ? 'Manual ban'
           : comment.trim();
-      final banComment = '$_banMarker $reason';
+      // Include IP so identical reasons do not share a comment identity.
+      final banComment = '$_banMarker $reason @$ipAddress';
 
       try {
         await makeClientStatic(ipAddress: ipAddress, macAddress: macToUse);
@@ -2150,6 +2241,7 @@ class MikroTikService {
         } catch (_) {}
       }
 
+      invalidateManagedBanRawRulesCache();
       return true;
     } catch (e) {
       throw Exception('Ban failed: $e');
@@ -2255,6 +2347,7 @@ class MikroTikService {
           macAddress: macToUse,
         );
         print('[UNBAN] still banned after cleanup (mac-only): $stillBanned');
+        invalidateManagedBanRawRulesCache();
         return !stillBanned;
       }
 
@@ -2264,6 +2357,7 @@ class MikroTikService {
       );
       print('[UNBAN] still banned after cleanup: $stillBanned');
 
+      invalidateManagedBanRawRulesCache();
       return !stillBanned;
     } catch (e) {
       throw Exception('Unban failed: $e');

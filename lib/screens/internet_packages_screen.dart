@@ -8,6 +8,7 @@ import '../utils/app_localizations.dart';
 import '../utils/app_theme.dart';
 import '../widgets/desktop_content.dart';
 import '../widgets/cosmic_background.dart';
+import '../widgets/province_selector.dart';
 
 /// صفحهٔ کاتالوگ بسته‌های اینترنتی — تم هماهنگ با روشن/تاریک پروژه.
 class InternetPackagesScreen extends StatefulWidget {
@@ -31,7 +32,23 @@ class _InternetPackagesScreenState extends State<InternetPackagesScreen> {
   @override
   void initState() {
     super.initState();
+    _settingsService.packageProvinceListenable.addListener(_onProvinceChanged);
     _loadProvince();
+  }
+
+  @override
+  void dispose() {
+    _settingsService.packageProvinceListenable
+        .removeListener(_onProvinceChanged);
+    super.dispose();
+  }
+
+  void _onProvinceChanged() {
+    final next = PackageProvinceX.tryParse(
+      _settingsService.packageProvinceListenable.value,
+    );
+    if (!mounted || next == null || next == _province) return;
+    _selectProvince(next, persist: false);
   }
 
   Future<void> _loadProvince() async {
@@ -75,6 +92,7 @@ class _InternetPackagesScreenState extends State<InternetPackagesScreen> {
     });
     if (persist) {
       await _settingsService.setPackageProvinceId(province.id);
+      await _settingsService.setServiceUrl(province.servicePanelUrl);
     }
   }
 
@@ -120,7 +138,7 @@ class _InternetPackagesScreenState extends State<InternetPackagesScreen> {
             else
               const SizedBox.shrink(),
             if (_pickerVisible)
-              _ProvincePickerOverlay(
+              ProvincePickerOverlay(
                 isEnglish: l10n?.locale.languageCode == 'en',
                 requiredChoice: _province == null,
                 selected: _province,
@@ -169,7 +187,7 @@ class _InternetPackagesScreenState extends State<InternetPackagesScreen> {
                     ),
                   ),
                   const SizedBox(width: 10),
-                  _ProvinceDropdown(
+                  ProvinceDropdown(
                     value: _province!,
                     isEnglish: isEn == true,
                     onChanged: (p) => _selectProvince(p, persist: true),
@@ -195,17 +213,13 @@ class _InternetPackagesScreenState extends State<InternetPackagesScreen> {
               child: KeyedSubtree(
                 key: ValueKey('${_province!.id}-$_selectedKind'),
                 child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    final crossAxisCount = isDesktop
-                        ? 3
-                        : (constraints.maxWidth < 340 ? 1 : 2);
+                  builder: (context, _) {
+                    // موبایل/تبلت: همیشه ۲ ستون — هرگز تک‌ستونه نشود
+                    final crossAxisCount = isDesktop ? 3 : 2;
                     final mainAxisExtent = switch (_selectedKind) {
-                      InternetPackageKind.volume =>
-                        crossAxisCount == 1 ? 272.0 : 288.0,
-                      InternetPackageKind.unlimited =>
-                        crossAxisCount == 1 ? 272.0 : 288.0,
-                      InternetPackageKind.dedicated =>
-                        crossAxisCount == 1 ? 248.0 : 262.0,
+                      InternetPackageKind.volume => 288.0,
+                      InternetPackageKind.unlimited => 288.0,
+                      InternetPackageKind.dedicated => 262.0,
                     };
 
                     if (packages.isEmpty) {
@@ -226,16 +240,16 @@ class _InternetPackagesScreenState extends State<InternetPackagesScreen> {
                         Expanded(
                           child: GridView.builder(
                             padding: EdgeInsets.fromLTRB(
-                              16,
+                              isDesktop ? 16 : 10,
                               4,
-                              16,
+                              isDesktop ? 16 : 10,
                               note == null ? 24 : 8,
                             ),
                             gridDelegate:
                                 SliverGridDelegateWithFixedCrossAxisCount(
                               crossAxisCount: crossAxisCount,
-                              mainAxisSpacing: 14,
-                              crossAxisSpacing: 14,
+                              mainAxisSpacing: 12,
+                              crossAxisSpacing: isDesktop ? 14 : 10,
                               mainAxisExtent: mainAxisExtent,
                             ),
                             itemCount: packages.length,
@@ -275,217 +289,6 @@ class _InternetPackagesScreenState extends State<InternetPackagesScreen> {
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ProvincePickerOverlay extends StatelessWidget {
-  const _ProvincePickerOverlay({
-    required this.isEnglish,
-    required this.requiredChoice,
-    required this.selected,
-    required this.onSelected,
-    this.onDismiss,
-  });
-
-  final bool isEnglish;
-  final bool requiredChoice;
-  final PackageProvince? selected;
-  final ValueChanged<PackageProvince> onSelected;
-  final VoidCallback? onDismiss;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-
-    return Material(
-      color: Colors.black.withValues(alpha: 0.55),
-      child: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: DecoratedBox(
-                decoration: AppTheme.cosmicCardDecoration(
-                  radius: 24,
-                  brightness: theme.brightness,
-                  withGlow: true,
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 22, 20, 16),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Text(
-                        isEnglish
-                            ? 'Select your province'
-                            : 'ولایت خود را انتخاب کنید',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700,
-                          color: theme.colorScheme.onSurface,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        isEnglish
-                            ? 'Packages differ by province. Your choice will be saved as default.'
-                            : 'بسته‌ها بر اساس ولایت متفاوت‌اند. انتخاب شما به‌عنوان پیش‌فرض ذخیره می‌شود.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 13.5,
-                          height: 1.45,
-                          color: isDark
-                              ? AppTheme.darkTextSecondary
-                              : Colors.grey.shade700,
-                        ),
-                      ),
-                      const SizedBox(height: 18),
-                      for (final province in PackageProvince.values) ...[
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 10),
-                          child: Material(
-                            color: Colors.transparent,
-                            child: InkWell(
-                              borderRadius: BorderRadius.circular(14),
-                              onTap: () => onSelected(province),
-                              child: Ink(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 14,
-                                  vertical: 14,
-                                ),
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(14),
-                                  color: selected == province
-                                      ? (isDark
-                                            ? AppTheme.darkAction
-                                            : AppTheme.primary
-                                                .withValues(alpha: 0.1))
-                                      : (isDark
-                                            ? AppTheme.darkCardBottom
-                                                .withValues(alpha: 0.65)
-                                            : Colors.white),
-                                  border: Border.all(
-                                    color: selected == province
-                                        ? (isDark
-                                              ? AppTheme.darkGlow
-                                              : AppTheme.primary)
-                                        : (isDark
-                                              ? AppTheme.darkRim
-                                                  .withValues(alpha: 0.4)
-                                              : AppTheme.lightRim),
-                                  ),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Icon(
-                                      Icons.location_on_outlined,
-                                      color: selected == province
-                                          ? (isDark
-                                                ? AppTheme.darkActionForeground
-                                                : AppTheme.primary)
-                                          : (isDark
-                                                ? AppTheme.darkTextSecondary
-                                                : AppTheme.primary),
-                                    ),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: Text(
-                                        province.title(isEnglish),
-                                        style: TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w600,
-                                          color: selected == province && isDark
-                                              ? AppTheme.darkActionForeground
-                                              : theme.colorScheme.onSurface,
-                                        ),
-                                      ),
-                                    ),
-                                    if (selected == province)
-                                      Icon(
-                                        Icons.check_circle,
-                                        color: isDark
-                                            ? AppTheme.darkActionForeground
-                                            : AppTheme.primary,
-                                      ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                      if (!requiredChoice && onDismiss != null)
-                        TextButton(
-                          onPressed: onDismiss,
-                          child: Text(isEnglish ? 'Close' : 'بستن'),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ProvinceDropdown extends StatelessWidget {
-  const _ProvinceDropdown({
-    required this.value,
-    required this.isEnglish,
-    required this.onChanged,
-  });
-
-  final PackageProvince value;
-  final bool isEnglish;
-  final ValueChanged<PackageProvince> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-
-    return DecoratedBox(
-      decoration: AppTheme.cosmicCardDecoration(
-        radius: 14,
-        brightness: theme.brightness,
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<PackageProvince>(
-          value: value,
-          borderRadius: BorderRadius.circular(14),
-          dropdownColor: isDark ? AppTheme.darkSurface : AppTheme.pureWhite,
-          icon: Icon(
-            Icons.keyboard_arrow_down_rounded,
-            color: isDark ? AppTheme.darkTextSecondary : AppTheme.primary,
-          ),
-          padding: const EdgeInsetsDirectional.only(start: 12, end: 8),
-          items: PackageProvince.values
-              .map(
-                (p) => DropdownMenuItem(
-                  value: p,
-                  child: Text(
-                    p.title(isEnglish),
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: theme.colorScheme.onSurface,
-                    ),
-                  ),
-                ),
-              )
-              .toList(),
-          onChanged: (next) {
-            if (next != null) onChanged(next);
-          },
         ),
       ),
     );

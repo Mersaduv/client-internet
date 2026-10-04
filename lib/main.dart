@@ -700,7 +700,6 @@ class _HomePageState extends State<HomePage> with RouteAware {
     _bannedScrollController.addListener(_onBannedScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final provider = Provider.of<ClientsProvider>(context, listen: false);
-      unawaited(provider.prefetchTabCounts());
       if (!provider.phase1Complete &&
           !provider.isLoading &&
           provider.clients.isEmpty) {
@@ -956,7 +955,7 @@ class _HomePageState extends State<HomePage> with RouteAware {
                       radius: 20,
                       brightness: theme.brightness,
                     ),
-                    child: !provider.phase3Complete
+                    child: !provider.phase1Complete && provider.isLoading
                         ? _buildConnectionHeaderSkeleton(context)
                         : Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1435,8 +1434,9 @@ class _HomePageState extends State<HomePage> with RouteAware {
     }
 
     if (provider.clientsForDisplay.isEmpty) {
-      // تا تشخیص آنلاین (phase2) اسکلتون؛ بعد از آن پیام خالی
-      if (!provider.phase2Complete) {
+      // پس از phase1 لیست واقعی (حتی خالی) نشان داده شود؛ phase2 فقط وضعیت آنلاین را تکمیل می‌کند.
+      if (!provider.phase1Complete &&
+          (provider.isLoading || provider.isRefreshing)) {
         return Column(
           children: [
             Expanded(

@@ -69,6 +69,7 @@ class ClientsProvider extends ChangeNotifier {
   int _pendingNotifications = 0;
   bool _apiOperationInProgress = false;
   String? _activeOperationDeviceMac;
+  bool _sequentialHomeLoadActive = false;
 
   // Fast tab counts + paginated connected list window
   int? _connectedCountHint;
@@ -621,12 +622,23 @@ class ClientsProvider extends ChangeNotifier {
       _visibleBannedLimit = 0;
       return;
     }
-    if (_visibleBannedLimit == 0) {
-      _visibleBannedLimit = DeviceListPagination.initialPageSize.clamp(
-        1,
-        _bannedClients.length,
-      );
+    // Always expose at least the first page after list updates (fast → merged).
+    final desired = DeviceListPagination.initialPageSize.clamp(
+      1,
+      _bannedClients.length,
+    );
+    if (_visibleBannedLimit < desired) {
+      _visibleBannedLimit = desired;
     }
+  }
+
+  void _scheduleBannedListEnrichIfIdle() {
+    if (_sequentialHomeLoadActive ||
+        _serviceManager.isProgressiveLoadActive ||
+        _isBannedEnriching) {
+      return;
+    }
+    unawaited(_enrichBannedClients());
   }
 
   /// Fetch banned count + list immediately from one lightweight raw query.
@@ -641,7 +653,7 @@ class ClientsProvider extends ChangeNotifier {
       );
       _applyBannedList(bannedList, markLoaded: true);
       notifyListeners();
-      unawaited(_enrichBannedClients());
+      _scheduleBannedListEnrichIfIdle();
     } catch (e) {
       debugPrint('[PROGRESSIVE_LOAD] fast banned list failed: $e');
     }
@@ -657,6 +669,135 @@ class ClientsProvider extends ChangeNotifier {
       _bannedListLoaded = true;
     }
     _ensureBannedWindowInitialized();
+  }
+
+  /// Fill missing IP/MAC/hostname from DHCP leases and merge IP-only + MAC-only
+  /// rows that belong to the same device — no extra RouterOS API call.
+  void _mergeBannedListWithLeases(List<Map<String, String>> leases) {
+    if (_bannedClients.isEmpty || leases.isEmpty) {
+      return;
+    }
+
+    final dhcpByIp = <String, Map<String, String>>{};
+    final dhcpByMac = <String, Map<String, String>>{};
+    for (final lease in leases) {
+      final ip = lease['address']?.trim();
+      final mac = lease['mac-address']?.trim().toUpperCase();
+      if (ip != null && ip.isNotEmpty) {
+        dhcpByIp[ip] = lease;
+      }
+      if (mac != null && mac.isNotEmpty) {
+        dhcpByMac[mac] = lease;
+      }
+    }
+
+    for (final banned in _bannedClients) {
+      var ip = banned['address']?.toString().trim();
+      var mac = banned['mac_address']?.toString().trim().toUpperCase();
+
+      if ((mac == null || mac.isEmpty) &&
+          ip != null &&
+          ip.isNotEmpty &&
+          dhcpByIp.containsKey(ip)) {
+        mac = dhcpByIp[ip]!['mac-address']?.trim().toUpperCase();
+        if (mac != null && mac.isNotEmpty) {
+          banned['mac_address'] = mac;
+        }
+      }
+      if ((ip == null || ip.isEmpty) &&
+          mac != null &&
+          mac.isNotEmpty &&
+          dhcpByMac.containsKey(mac)) {
+        ip = dhcpByMac[mac]!['address']?.trim();
+        if (ip != null && ip.isNotEmpty) {
+          banned['address'] = ip;
+        }
+      }
+
+      final lease = (mac != null && mac.isNotEmpty)
+          ? dhcpByMac[mac]
+          : (ip != null && ip.isNotEmpty ? dhcpByIp[ip] : null);
+      if (lease != null) {
+        final hostName = _displayNameFromLease(lease);
+        if (hostName != null && hostName.isNotEmpty) {
+          banned['host_name'] = hostName;
+        }
+        banned['dhcp_status'] = lease['status'];
+        banned['dhcp_blocked'] =
+            lease['block-access']?.toLowerCase() == 'yes' ||
+            lease['block-access']?.toLowerCase() == 'true';
+      }
+    }
+
+    final grouped = <String, Map<String, dynamic>>{};
+    for (final banned in _bannedClients) {
+      final mac = banned['mac_address']?.toString().trim().toUpperCase();
+      final ip = banned['address']?.toString().trim();
+      final ruleIds = banned['rule_ids'];
+      final key = (mac != null && mac.isNotEmpty)
+          ? 'mac:$mac'
+          : (ip != null && ip.isNotEmpty)
+              ? 'ip:$ip'
+              : 'id:${ruleIds is List && ruleIds.isNotEmpty ? ruleIds.first : banned.hashCode}';
+
+      final existing = grouped[key];
+      if (existing == null) {
+        grouped[key] = Map<String, dynamic>.from(banned);
+        continue;
+      }
+
+      if ((existing['address'] == null || existing['address'] == '') &&
+          ip != null &&
+          ip.isNotEmpty) {
+        existing['address'] = ip;
+      }
+      if ((existing['mac_address'] == null || existing['mac_address'] == '') &&
+          mac != null &&
+          mac.isNotEmpty) {
+        existing['mac_address'] = mac;
+      }
+      if ((existing['host_name'] == null ||
+              existing['host_name'].toString().isEmpty) &&
+          banned['host_name'] != null) {
+        existing['host_name'] = banned['host_name'];
+      }
+      if ((existing['comment']?.toString().isEmpty ?? true) &&
+          (banned['comment']?.toString().isNotEmpty ?? false)) {
+        existing['comment'] = banned['comment'];
+      }
+
+      final existingRules = List<String>.from(
+        (existing['rule_ids'] as List?)?.map((e) => e.toString()) ?? const [],
+      );
+      for (final id in (banned['rule_ids'] as List?) ?? const []) {
+        final value = id.toString();
+        if (!existingRules.contains(value)) {
+          existingRules.add(value);
+        }
+      }
+      existing['rule_ids'] = existingRules;
+
+      final existingChains = List<String>.from(
+        (existing['chains'] as List?)?.map((e) => e.toString()) ?? const [],
+      );
+      for (final chain in (banned['chains'] as List?) ?? const []) {
+        final value = chain.toString();
+        if (!existingChains.contains(value)) {
+          existingChains.add(value);
+        }
+      }
+      existing['chains'] = existingChains;
+
+      existing['raw_blocked'] =
+          existing['raw_blocked'] == true || banned['raw_blocked'] == true;
+      existing['dhcp_blocked'] =
+          existing['dhcp_blocked'] == true || banned['dhcp_blocked'] == true;
+      existing['wireless_blocked'] =
+          existing['wireless_blocked'] == true ||
+          banned['wireless_blocked'] == true;
+    }
+
+    _applyBannedList(grouped.values.toList(), markLoaded: true);
   }
 
   void _resetPaginationLoadingState() {
@@ -1111,7 +1252,7 @@ class ClientsProvider extends ChangeNotifier {
         notifyListeners();
       }
 
-      unawaited(_enrichBannedClients());
+      _scheduleBannedListEnrichIfIdle();
     } catch (e) {
       debugPrint('[PROGRESSIVE_LOAD] banned list failed: $e');
       if (_bannedClients.isEmpty) {
@@ -1156,7 +1297,7 @@ class ClientsProvider extends ChangeNotifier {
     }
     if (_bannedListLoaded && !force) {
       if (_bannedClients.isNotEmpty) {
-        unawaited(_enrichBannedClients());
+        _scheduleBannedListEnrichIfIdle();
         return;
       }
       if ((_bannedCountHint ?? 0) == 0) {
@@ -1197,6 +1338,8 @@ class ClientsProvider extends ChangeNotifier {
     );
 
     _clients = leases.map(_clientFromDhcpLease).toList();
+    // Merge IP/MAC ban rows + hostnames from leases before filtering banned out.
+    _mergeBannedListWithLeases(leases);
     _filterBannedFromConnectedList();
     _clients.sort(_compareClientsByIpOrder);
     _applyResolvedDeviceIdentity(_deviceIp, clients: _clients);
@@ -1828,11 +1971,14 @@ class ClientsProvider extends ChangeNotifier {
 
     _stopTrafficStream();
     _trafficStore.reset();
+    _sequentialHomeLoadActive = true;
     _serviceManager.beginProgressiveLoad();
     try {
       await _resolveDeviceIdentityEarly();
 
-      unawaited(prefetchTabCounts());
+      // One ban-rules fetch before phase1 so connected list filtering is correct
+      // and we avoid duplicate firewall/raw API calls queued behind heavy enrich.
+      await prefetchTabCounts();
       await _loadPhase1DeviceList();
 
       _phase1Complete = true;
@@ -1856,8 +2002,10 @@ class ClientsProvider extends ChangeNotifier {
       _isLoading = false;
       _isDataComplete = false;
       _phase2Complete = true;
+      _sequentialHomeLoadActive = false;
       _serviceManager.endProgressiveLoad();
       notifyListeners();
+      _scheduleBannedListEnrichIfIdle();
     }
   }
 
@@ -1876,6 +2024,9 @@ class ClientsProvider extends ChangeNotifier {
       _phase2Complete = true;
       _isDataComplete = true;
       notifyListeners();
+    } finally {
+      _sequentialHomeLoadActive = false;
+      _scheduleBannedListEnrichIfIdle();
     }
   }
 
@@ -1921,7 +2072,7 @@ class ClientsProvider extends ChangeNotifier {
     _phase2Complete = false;
     notifyListeners();
     try {
-      unawaited(prefetchTabCounts());
+      await prefetchTabCounts();
       await _loadPhase1DeviceList(preserveVisibleWindow: true);
       _phase1Complete = true;
       _isLoading = false;
@@ -2793,6 +2944,7 @@ class ClientsProvider extends ChangeNotifier {
     _isEnsuringCurrentDeviceStatic = false;
     _lastAutoStaticIp = null;
     _approvalActionsInProgress.clear();
+    _sequentialHomeLoadActive = false;
     notifyListeners();
   }
 

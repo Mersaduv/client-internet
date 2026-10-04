@@ -20,6 +20,10 @@ class SettingsService {
   static const String _keyThemeMode = 'app_theme_mode';
   static const String _keyPackageProvince = 'package_province';
 
+  /// برای همگام‌سازی ولایت بین تب بسته‌ها و سرویس اینترنت
+  final ValueNotifier<String?> packageProvinceListenable =
+      ValueNotifier<String?>(null);
+
   static const _secureStorage = FlutterSecureStorage(
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
     iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
@@ -382,21 +386,31 @@ class SettingsService {
   /// ولایت بسته‌های اینترنتی ذخیره‌شده — null یعنی هنوز انتخاب نشده
   Future<String?> getPackageProvinceId() async {
     if (_cachedPackageProvince != null) {
-      return _cachedPackageProvince!.isEmpty ? null : _cachedPackageProvince;
+      final id =
+          _cachedPackageProvince!.isEmpty ? null : _cachedPackageProvince;
+      if (packageProvinceListenable.value != id) {
+        packageProvinceListenable.value = id;
+      }
+      return id;
     }
     try {
       final prefs = await SharedPreferences.getInstance();
       final value = prefs.getString(_keyPackageProvince);
       _cachedPackageProvince = value ?? '';
-      return (value == null || value.isEmpty) ? null : value;
+      final id = (value == null || value.isEmpty) ? null : value;
+      if (packageProvinceListenable.value != id) {
+        packageProvinceListenable.value = id;
+      }
+      return id;
     } catch (_) {
       return null;
     }
   }
 
-  /// ذخیره ولایت پیش‌فرض بسته‌ها
+  /// ذخیره ولایت پیش‌فرض (بسته‌ها + سرویس اینترنت)
   Future<void> setPackageProvinceId(String provinceId) async {
     _cachedPackageProvince = provinceId;
+    packageProvinceListenable.value = provinceId;
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_keyPackageProvince, provinceId);
@@ -414,6 +428,7 @@ class SettingsService {
     _cachedLanguage = null;
     _cachedThemeMode = null;
     _cachedPackageProvince = null;
+    packageProvinceListenable.value = null;
     
     try {
       final prefs = await SharedPreferences.getInstance();
